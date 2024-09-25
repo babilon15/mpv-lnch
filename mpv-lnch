@@ -1,0 +1,441 @@
+#!/usr/bin/python3
+
+from string import digits, punctuation, whitespace
+from subprocess import Popen, DEVNULL
+from collections import namedtuple
+from os import getenv, listdir
+from shlex import split
+import os.path
+import curses
+
+NO_MODULE_NATSORT = False
+
+try:
+	from natsort import os_sorted
+except ModuleNotFoundError:
+	NO_MODULE_NATSORT = True
+
+FdItem = namedtuple(
+	"FdItem", ["is_dir", "full", "name", "ext", "hidden"]
+)
+
+SPACE_CH = chr(32)
+
+DEF_FILTER_EXTENSIONS = [
+	"aac",
+	"avi",
+	"flac",
+	"m3u",
+	"m3u8",
+	"m4a",
+	"mkv",
+	"mov",
+	"mp3",
+	"mp4",
+	"ogg",
+	"wav",
+	"webm",
+	"wma",
+	"wmv",
+	"srt",
+	"cue",
+	"iso",
+]
+
+ENV_MPVL_MPV_CMD = getenv("MPVL_MPV_CMD", "mpv --force-window")
+ENV_MPVL_HOME = getenv("MPVL_HOME", ".")
+ENV_MPVL_BM_F1 = getenv("MPVL_BM_F1", "")
+ENV_MPVL_BM_F2 = getenv("MPVL_BM_F2", "")
+ENV_MPVL_BM_F3 = getenv("MPVL_BM_F3", "")
+ENV_MPVL_BM_F4 = getenv("MPVL_BM_F4", "")
+
+MPV_SUB_FILE_OPTION = "--sub-file="
+
+
+def exec_nonblocking(cmd):
+	p = Popen(
+		split(cmd),
+		stdin=DEVNULL,
+		stdout=DEVNULL,
+		stderr=DEVNULL,
+		start_new_session=True,
+	)
+	return p.pid
+
+
+def get_filename_ext(name):
+	_, ext = os.path.splitext(name)
+	return ext.lstrip(".")
+
+
+def is_hidden_by_filename(name):
+	try:
+		return name[0] == "."
+	except IndexError:
+		return False
+
+
+def repeat_string(string, num, between=""):
+	return between.join([string for x in range(num)])
+
+
+def string_max(
+	string,
+	max_len,
+	end_first=False,
+	extend=False,
+	extend_ch=SPACE_CH,
+):
+	out = []
+	string_len = len(string)
+	if string_len > max_len:
+		if end_first:
+			out.append(string[-max_len:])
+		else:
+			out.append(string[0:max_len])
+	else:
+		out.append(string)
+		if extend:
+			out.append(
+				repeat_string(
+					extend_ch,
+					max_len - string_len,
+				)
+			)
+	return "".join(out)
+
+
+def is_filter_ch(ch):
+	return (
+		ch.isalpha()
+		or ch in list(digits)
+		or ch == SPACE_CH
+		or ch in list(punctuation)
+	)
+
+
+def search_by_words(term, text):
+	term = term.upper()
+	text = text.upper()
+	term_list = term.split(SPACE_CH)
+	term_list_len = len(term_list)
+	hit = 0
+	for w in term_list:
+		if w.strip(whitespace) in text:
+			hit += 1
+	return term_list_len == hit
+
+
+class Navigation:
+	def __init__(self, path="."):
+		self.path = os.path.abspath(path)
+		self.prev_path = self.path
+		self.home = self.path
+
+		self.filter_hidden = False
+		self.filter_exts = []
+		self.filter_text = ""
+
+		self.fd_list = []
+		self.fd_list_filtered = []
+
+	def refresh_fd_list(self):
+		self.fd_list *= 0
+		try:
+			fd_temp = listdir(self.path)
+		except PermissionError:
+			return
+		except FileNotFoundError:
+			return
+		except NotADirectoryError:
+			return
+		if NO_MODULE_NATSORT:
+			fd_temp.sort()
+		else:
+			fd_temp = os_sorted(fd_temp)
+		for name in fd_temp:
+			full = os.path.join(self.path, name)
+			self.fd_list.append(
+				FdItem(
+					is_dir=os.path.isdir(full),
+					full=full,
+					name=name,
+					ext=get_filename_ext(name),
+					hidden=is_hidden_by_filename(name),
+				)
+			)
+
+	def refresh_fd_list_filtered(self):
+		self.fd_list_filtered *= 0
+		for item in self.fd_list:
+			if not self.filter_hidden and item.hidden:
+				continue
+			if (
+				self.filter_exts
+				and not item.is_dir
+				and item.ext not in self.filter_exts
+			):
+				continue
+			if self.filter_text and not search_by_words(
+				self.filter_text, item.name
+			):
+				continue
+			self.fd_list_filtered.append(item)
+
+	def refresh(self):
+		self.refresh_fd_list()
+		self.refresh_fd_list_filtered()
+
+	def reset_filter_text(self):
+		self.filter_text *= 0
+
+	def cd(self, name):
+		self.prev_path = self.path
+		self.path = os.path.abspath(os.path.join(self.path, name))
+
+	def up(self):
+		self.cd("..")
+
+	def cd_home(self):
+		self.path = self.home
+		self.prev_path = self.home
+
+	def index_fd_list_filtered(self, name):
+		i = -1
+		for c, item in enumerate(self.fd_list_filtered):
+			if name == item.name:
+				i = c
+		return i
+
+
+class App(object):
+	def __init__(self):
+		self.window = curses.initscr()
+		self.window.keypad(True)
+		curses.curs_set(0)
+		curses.noecho()
+		curses.start_color()
+		curses.use_default_colors()
+
+		try:
+			curses.init_pair(
+				1, curses.COLOR_BLACK, curses.COLOR_WHITE
+			)  # status line
+			curses.init_pair(
+				2, curses.COLOR_BLACK, curses.COLOR_YELLOW
+			)  # filter prompt
+			curses.init_pair(3, 10, -1)  # file
+			curses.init_pair(4, 12, -1)  # dir
+			####
+			curses.init_pair(5, curses.COLOR_BLACK, 10)  # file
+			curses.init_pair(6, curses.COLOR_BLACK, 12)  # dir
+		except ValueError:
+			curses.init_pair(3, -1, -1)
+			curses.init_pair(4, -1, -1)
+			curses.init_pair(5, curses.COLOR_BLACK, curses.COLOR_WHITE)
+			curses.init_pair(6, curses.COLOR_BLACK, curses.COLOR_WHITE)
+
+		self.navi = Navigation(ENV_MPVL_HOME)
+		self.navi.filter_exts = DEF_FILTER_EXTENSIONS
+		self.navi.refresh()
+
+		self.cur_i = 0
+
+		self.sub_path = ""
+
+	def cur_i_rectify(self):
+		fd_list_filtered_len = len(self.navi.fd_list_filtered)
+		if self.cur_i < 0:
+			self.cur_i = fd_list_filtered_len - 1
+		elif self.cur_i > fd_list_filtered_len - 1:
+			self.cur_i = 0
+		else:
+			pass
+
+	def draw(self):
+		self.window.erase()
+
+		status_line = [self.navi.path]
+		if self.sub_path:
+			status_line.append("[SUB]")
+		if not self.navi.fd_list_filtered:
+			status_line.append("[EMPTY]")
+		self.window.addstr(
+			0,
+			0,
+			string_max(
+				(2 * SPACE_CH).join(status_line), curses.COLS, True, True
+			),
+			curses.color_pair(1),
+		)
+
+		cur_y = curses.LINES // 2
+		neg_c = cur_y - 1
+		top_slice = self.navi.fd_list_filtered[: self.cur_i]
+		top_slice.reverse()
+		for item in top_slice:
+			self.window.addstr(
+				neg_c,
+				0,
+				string_max(
+					"".join((item.name, "/")) if item.is_dir else item.name,
+					curses.COLS,
+				),
+				curses.color_pair(4)
+				if item.is_dir
+				else curses.color_pair(3),
+			)
+			neg_c -= 1
+			if neg_c == 0:
+				break
+
+		try:
+			item = self.navi.fd_list_filtered[self.cur_i]
+			self.window.addstr(
+				cur_y,
+				0,
+				string_max(
+					"".join((item.name, "/")) if item.is_dir else item.name,
+					curses.COLS,
+					extend=True,
+				),
+				curses.color_pair(6)
+				if item.is_dir
+				else curses.color_pair(5),
+			)
+		except IndexError:
+			pass
+
+		pos_c = cur_y + 1
+		for item in self.navi.fd_list_filtered[self.cur_i + 1 :]:
+			self.window.addstr(
+				pos_c,
+				0,
+				string_max(
+					"".join((item.name, "/")) if item.is_dir else item.name,
+					curses.COLS,
+				),
+				curses.color_pair(4)
+				if item.is_dir
+				else curses.color_pair(3),
+			)
+			pos_c += 1
+			if pos_c == curses.LINES - 1:
+				break
+
+		self.window.addstr(
+			curses.LINES - 1, 0, ":", curses.color_pair(2)
+		)
+		self.window.addstr(
+			curses.LINES - 1,
+			1,
+			string_max(self.navi.filter_text, curses.COLS - 1, True),
+		)
+
+		self.window.refresh()
+
+	def loop(self):
+		while 1:
+			self.draw()
+			if self.input():
+				break
+			self.cur_i_rectify()
+
+	def input(self):
+		wch = self.window.get_wch()
+		wch_str = str(wch)
+
+		if wch == curses.KEY_F12:
+			return True
+		elif wch == curses.KEY_F7:
+			if self.sub_path:
+				self.sub_path *= 0
+			else:
+				try:
+					item = self.navi.fd_list_filtered[self.cur_i]
+				except IndexError:
+					pass
+				else:
+					if not item.is_dir:
+						self.sub_path = item.full
+		elif wch == curses.KEY_F6:
+			self.navi.filter_hidden = not self.navi.filter_hidden
+			self.cur_i = 0
+			self.navi.refresh_fd_list_filtered()
+		elif wch == curses.KEY_F5:
+			pass
+		elif wch == curses.KEY_F4:
+			pass
+		elif wch == curses.KEY_F3:
+			pass
+		elif wch == curses.KEY_F2:
+			pass
+		elif wch == curses.KEY_F1:
+			pass
+		elif wch == curses.KEY_RESIZE:
+			curses.update_lines_cols()
+		elif wch == curses.KEY_UP:
+			self.cur_i -= 1
+		elif wch == curses.KEY_DOWN:
+			self.cur_i += 1
+		elif wch == curses.KEY_LEFT:
+			self.navi.up()
+			self.navi.filter_text *= 0
+			self.navi.refresh()
+			self.cur_i = self.navi.index_fd_list_filtered(
+				os.path.basename(self.navi.prev_path)
+			)
+			if self.cur_i == -1:
+				self.cur_i = 0
+		elif wch == curses.KEY_RIGHT:
+			self.choose()
+			self.navi.refresh()
+		elif wch == curses.KEY_BACKSPACE:
+			try:
+				self.navi.filter_text = self.navi.filter_text[:-1]
+			except IndexError:
+				pass
+			else:
+				self.cur_i = 0
+				self.navi.refresh_fd_list_filtered()
+		elif wch == curses.KEY_DC or wch == curses.KEY_DL:
+			self.navi.filter_text *= 0
+			self.cur_i = 0
+			self.navi.refresh_fd_list_filtered()
+		else:
+			if is_filter_ch(wch_str):
+				self.navi.filter_text = "".join(
+					(self.navi.filter_text, wch_str)
+				)
+				self.navi.refresh_fd_list_filtered()
+
+	def choose(self):
+		try:
+			item = self.navi.fd_list_filtered[self.cur_i]
+		except IndexError:
+			return
+		if item.is_dir:
+			self.navi.cd(item.name)
+			self.cur_i = 0
+			self.navi.filter_text *= 0
+		else:
+			cmd = [ENV_MPVL_MPV_CMD]
+			if self.sub_path:
+				cmd.append(
+					"".join((MPV_SUB_FILE_OPTION, '"', self.sub_path, '"'))
+				)
+			cmd.append("".join(('"', item.full, '"')))
+			exec_nonblocking(SPACE_CH.join(cmd))
+
+	def run(self):
+		try:
+			self.loop()
+		except KeyboardInterrupt:
+			pass
+		finally:
+			curses.endwin()
+
+
+if __name__ == "__main__":
+	app = App()
+	app.run()
