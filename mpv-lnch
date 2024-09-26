@@ -23,8 +23,13 @@ SPACE_CH = chr(32)
 
 DEF_FILTER_EXTENSIONS = [
 	"aac",
+	"ass",
 	"avi",
+	"cue",
 	"flac",
+	"idx",
+	"iso",
+	"lrc",
 	"m3u",
 	"m3u8",
 	"m4a",
@@ -33,21 +38,24 @@ DEF_FILTER_EXTENSIONS = [
 	"mp3",
 	"mp4",
 	"ogg",
+	"srt",
+	"srt",
+	"sub",
+	"vtt",
 	"wav",
 	"webm",
 	"wma",
 	"wmv",
-	"srt",
-	"cue",
-	"iso",
 ]
+
+SUB_EXTS = ["ass", "idx", "lrc", "srt", "sub", "vtt"]
 
 ENV_MPVL_MPV_CMD = getenv("MPVL_MPV_CMD", "mpv --force-window")
 ENV_MPVL_HOME = getenv("MPVL_HOME", ".")
-ENV_MPVL_BM_F1 = getenv("MPVL_BM_F1", "")
-ENV_MPVL_BM_F2 = getenv("MPVL_BM_F2", "")
-ENV_MPVL_BM_F3 = getenv("MPVL_BM_F3", "")
-ENV_MPVL_BM_F4 = getenv("MPVL_BM_F4", "")
+ENV_MPVL_BM_F1 = getenv("MPVL_BM_F1", ".")
+ENV_MPVL_BM_F2 = getenv("MPVL_BM_F2", ".")
+ENV_MPVL_BM_F3 = getenv("MPVL_BM_F3", ".")
+ENV_MPVL_BM_F4 = getenv("MPVL_BM_F4", ".")
 
 MPV_SUB_FILE_OPTION = "--sub-file="
 
@@ -207,6 +215,11 @@ class Navigation:
 				i = c
 		return i
 
+	def path_overwrite(self, path):
+		path = os.path.abspath(path)
+		if os.path.isdir(path):
+			self.path, self.prev_path = path, path
+
 
 class App(object):
 	def __init__(self):
@@ -226,7 +239,7 @@ class App(object):
 			)  # filter prompt
 			curses.init_pair(3, 10, -1)  # file
 			curses.init_pair(4, 12, -1)  # dir
-			####
+
 			curses.init_pair(5, curses.COLOR_BLACK, 10)  # file
 			curses.init_pair(6, curses.COLOR_BLACK, 12)  # dir
 		except ValueError:
@@ -251,6 +264,12 @@ class App(object):
 			self.cur_i = 0
 		else:
 			pass
+
+	def get_current_item(self):
+		try:
+			return self.navi.fd_list_filtered[self.cur_i]
+		except IndexError:
+			return None
 
 	def draw(self):
 		self.window.erase()
@@ -289,8 +308,8 @@ class App(object):
 			if neg_c == 0:
 				break
 
-		try:
-			item = self.navi.fd_list_filtered[self.cur_i]
+		item = self.get_current_item()
+		if not isinstance(item, type(None)):
 			self.window.addstr(
 				cur_y,
 				0,
@@ -303,8 +322,6 @@ class App(object):
 				if item.is_dir
 				else curses.color_pair(5),
 			)
-		except IndexError:
-			pass
 
 		pos_c = cur_y + 1
 		for item in self.navi.fd_list_filtered[self.cur_i + 1 :]:
@@ -326,11 +343,15 @@ class App(object):
 		self.window.addstr(
 			curses.LINES - 1, 0, ":", curses.color_pair(2)
 		)
-		self.window.addstr(
-			curses.LINES - 1,
-			1,
-			string_max(self.navi.filter_text, curses.COLS - 1, True),
-		)
+		try:
+			self.window.addstr(
+				curses.LINES - 1,
+				1,
+				string_max(self.navi.filter_text, curses.COLS - 1, True),
+				curses.color_pair(2),
+			)
+		except curses.error:
+			pass
 
 		self.window.refresh()
 
@@ -351,27 +372,39 @@ class App(object):
 			if self.sub_path:
 				self.sub_path *= 0
 			else:
-				try:
-					item = self.navi.fd_list_filtered[self.cur_i]
-				except IndexError:
-					pass
-				else:
-					if not item.is_dir:
-						self.sub_path = item.full
+				item = self.get_current_item()
+				if (
+					not isinstance(item, type(None))
+					and not item.is_dir
+					and get_filename_ext(item.name) in SUB_EXTS
+				):
+					self.sub_path = item.full
 		elif wch == curses.KEY_F6:
 			self.navi.filter_hidden = not self.navi.filter_hidden
 			self.cur_i = 0
 			self.navi.refresh_fd_list_filtered()
 		elif wch == curses.KEY_F5:
-			pass
+			self.mpv_open(self.navi.path)
 		elif wch == curses.KEY_F4:
-			pass
+			self.navi.path_overwrite(ENV_MPVL_BM_F4)
+			self.navi.reset_filter_text()
+			self.cur_i = 0
+			self.navi.refresh()
 		elif wch == curses.KEY_F3:
-			pass
+			self.navi.path_overwrite(ENV_MPVL_BM_F3)
+			self.navi.reset_filter_text()
+			self.cur_i = 0
+			self.navi.refresh()
 		elif wch == curses.KEY_F2:
-			pass
+			self.navi.path_overwrite(ENV_MPVL_BM_F2)
+			self.navi.reset_filter_text()
+			self.cur_i = 0
+			self.navi.refresh()
 		elif wch == curses.KEY_F1:
-			pass
+			self.navi.path_overwrite(ENV_MPVL_BM_F1)
+			self.navi.reset_filter_text()
+			self.cur_i = 0
+			self.navi.refresh()
 		elif wch == curses.KEY_RESIZE:
 			curses.update_lines_cols()
 		elif wch == curses.KEY_UP:
@@ -380,7 +413,7 @@ class App(object):
 			self.cur_i += 1
 		elif wch == curses.KEY_LEFT:
 			self.navi.up()
-			self.navi.filter_text *= 0
+			self.navi.reset_filter_text()
 			self.navi.refresh()
 			self.cur_i = self.navi.index_fd_list_filtered(
 				os.path.basename(self.navi.prev_path)
@@ -399,7 +432,7 @@ class App(object):
 				self.cur_i = 0
 				self.navi.refresh_fd_list_filtered()
 		elif wch == curses.KEY_DC or wch == curses.KEY_DL:
-			self.navi.filter_text *= 0
+			self.navi.reset_filter_text()
 			self.cur_i = 0
 			self.navi.refresh_fd_list_filtered()
 		else:
@@ -409,23 +442,25 @@ class App(object):
 				)
 				self.navi.refresh_fd_list_filtered()
 
+	def mpv_open(self, path, sub_path=""):
+		cmd = [ENV_MPVL_MPV_CMD]
+		if sub_path:
+			cmd.append(
+				"".join((MPV_SUB_FILE_OPTION, '"', sub_path, '"'))
+			)
+		cmd.append("".join(('"', path, '"')))
+		return exec_nonblocking(SPACE_CH.join(cmd))
+
 	def choose(self):
-		try:
-			item = self.navi.fd_list_filtered[self.cur_i]
-		except IndexError:
+		item = self.get_current_item()
+		if isinstance(item, type(None)):
 			return
 		if item.is_dir:
 			self.navi.cd(item.name)
 			self.cur_i = 0
-			self.navi.filter_text *= 0
+			self.navi.reset_filter_text()
 		else:
-			cmd = [ENV_MPVL_MPV_CMD]
-			if self.sub_path:
-				cmd.append(
-					"".join((MPV_SUB_FILE_OPTION, '"', self.sub_path, '"'))
-				)
-			cmd.append("".join(('"', item.full, '"')))
-			exec_nonblocking(SPACE_CH.join(cmd))
+			self.mpv_open(item.full, self.sub_path)
 
 	def run(self):
 		try:
