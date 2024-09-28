@@ -7,6 +7,9 @@ from os import getenv, listdir
 from shlex import split
 import os.path
 import curses
+import signal
+
+signal.signal(signal.SIGCHLD, signal.SIG_IGN)
 
 NO_MODULE_NATSORT = False
 
@@ -221,7 +224,7 @@ class Navigation:
 			self.path, self.prev_path = path, path
 
 
-class App(object):
+class App:
 	def __init__(self):
 		self.window = curses.initscr()
 		self.window.keypad(True)
@@ -431,7 +434,7 @@ class App(object):
 			else:
 				self.cur_i = 0
 				self.navi.refresh_fd_list_filtered()
-		elif wch == curses.KEY_DC or wch == curses.KEY_DL:
+		elif wch in (curses.KEY_DC, curses.KEY_DL):
 			self.navi.reset_filter_text()
 			self.cur_i = 0
 			self.navi.refresh_fd_list_filtered()
