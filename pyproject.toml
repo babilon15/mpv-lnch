@@ -1,6 +1,7 @@
 [tool.ruff]
-indent-width=1
-line-length=64
+indent-width=4
+line-length=120
 
 [tool.ruff.format]
-indent-style="tab"
+indent-style="space"
+docstring-code-line-length="dynamic"
