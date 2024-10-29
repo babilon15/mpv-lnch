@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+# pylint:disable=line-too-long,too-many-statements,too-many-branches,too-many-instance-attributes
 
 """Simple and easy-to-use text-based program for launching mpv."""
 
@@ -381,10 +382,10 @@ class App:
         else:
             ext: str = item.get_ext()
             if ext in SUB_EXTS:
-                if not self.sub_path:  # empty string
+                if self.sub_path != item.full:
                     self.sub_path = item.full
                     self.current_message = "Subtitle selected: {}".format(item.name)
-                else:  # not empty, but needs to be deleted. (toggle-like)
+                else:
                     self.sub_path *= 0
                     self.current_message = "No subtitle selected."
                 return
@@ -446,7 +447,7 @@ class App:
         wch = self.window.get_wch()
         if wch == curses.KEY_RESIZE:
             self.refresh_sizes()
-            self.reset_index()
+            self.set_cursor(self.get_index())
         elif wch == curses.KEY_DOWN:
             self.input_down()
         elif wch == curses.KEY_UP:
@@ -467,6 +468,7 @@ class App:
             self.current_message *= 0
             self.navi_filtered.refresh_fd_list()
             self.navi_filtered.refresh_fd_list_filtered()
+            self.reset_index()
         elif wch == curses.KEY_F6:
             self.navi_filtered.toggle_filter_show_dirs()
             self.navi_filtered.refresh_fd_list_filtered()
@@ -479,6 +481,9 @@ class App:
             self.restore_last_item()
         elif wch == curses.KEY_F9:
             pass
+        elif wch == curses.KEY_F10:
+            self.sub_path *= 0
+            self.current_message = "[F10] No subtitle selected."
         elif wch == curses.KEY_F11:
             pass
         elif wch == curses.KEY_F12:  # exit
